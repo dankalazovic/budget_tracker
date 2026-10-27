@@ -2,7 +2,7 @@ import re
 from datetime import date
 from decimal import Decimal, InvalidOperation
 
-from app import db
+from app.extensions import db
 from app.models import Category
 
 

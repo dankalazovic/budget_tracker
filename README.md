@@ -6,7 +6,7 @@ transakcija sa filterima, sortiranjem i paginacijom.
 
 ## Pokretanje
 
-Potrebni su Python 3 i pokrenut PostgreSQL server. U PostgreSQL-u prvo napraviti
+Potrebni su Python 3.11 ili noviji i pokrenut PostgreSQL server. U PostgreSQL-u prvo napraviti
 praznu bazu `budget_tracker`, ako vec ne postoji.
 
 Iz korena projekta, u PowerShell-u:
@@ -31,13 +31,83 @@ Zatim pripremi tabele i pokreni aplikaciju:
 
 API je dostupan na `http://127.0.0.1:5000`.
 
-`init-db` pravi nedostajuce tabele i dodaje jedinstveni indeks za nazive
-kategorija. Ne brise postojece podatke i moze se pokrenuti vise puta. Ako u staroj
-bazi postoje duplikati naziva nezavisno od velicine slova, komanda prijavljuje
-gresku; ne brise ih i ne spaja ih automatski.
+`init-db` pokrece Alembic `upgrade head`: primenjuje verzionisane migracije na
+praznu ili vec verzionisanu bazu. Ponovljen poziv bez novih migracija ne menja
+postojece podatke. Aplikacija ne kreira tabele automatski pri pokretanju.
 
-Ovo nije opsta komanda za sve buduce izmene seme. Trenutno pokriva postojece
-modele i dodavanje indeksa kategorija.
+## Struktura projekta
+
+```text
+app/
+  __init__.py           # create_app i povezivanje delova aplikacije
+  extensions.py         # zajednicki SQLAlchemy db i DeclarativeBase
+  models/
+    category.py        # model kategorije
+    transaction.py     # model transakcije
+  api/
+    categories.py      # rute kategorija
+    transactions.py    # rute transakcija
+    health.py          # pocetna provera rada
+    helpers.py         # zajednicki pomocni kod ruta
+  validation.py        # postojece validacije
+  commands.py          # CLI komanda za migracije
+migrations/
+  env.py               # povezivanje Alembic-a sa modelima i bazom
+  versions/            # automatski generisane revizije
+tests/
+alembic.ini
+```
+
+Rute su grupisane kroz Flask Blueprint-e. Blueprint organizuje rute jednog
+resursa; postojeci URL-ovi i JSON odgovori ostaju isti. `create_app()` pravi
+aplikaciju i registruje te grupe. Modeli koriste SQLAlchemy 2 `Mapped` i
+`mapped_column`, sa jednim fajlom po tabeli.
+
+## Migracije baze
+
+Alembic ucitava `DATABASE_URL` iz okruzenja ili lokalnog `.env`; lozinka se ne
+upisuje u `alembic.ini` ni u migracije.
+
+Za praznu bazu ili primenu novih revizija:
+
+```powershell
+.\venv\Scripts\python.exe -m alembic upgrade head
+```
+
+To isto radi i ranije prikazana Flask komanda `init-db`.
+
+Posle izmene modela generisati novu migraciju, pregledati generisani fajl, pa je
+primeniti. Migracije se ne pisu rucno od nule:
+
+```powershell
+.\venv\Scripts\python.exe -m alembic revision --autogenerate -m "Opis promene seme"
+.\venv\Scripts\python.exe -m alembic upgrade head
+.\venv\Scripts\python.exe -m alembic check
+```
+
+`check` proverava da li Alembic vidi preostale razlike izmedju modela i baze.
+Generisani fajl u `migrations/versions/` cuva se u Gitu zajedno sa izmenom modela.
+
+Provera trenutne revizije i istorije:
+
+```powershell
+.\venv\Scripts\python.exe -m alembic current
+.\venv\Scripts\python.exe -m alembic history
+```
+
+Pocetna revizija je `a128effd0953`. Ako vec postoje tabele iz stare verzije
+projekta bez Alembic revizije, `init-db` ih ne prepisuje i odbija nastavak.
+Prvo treba uporediti stvarnu semu sa pocetnom migracijom, ukljucujuci kolone,
+kljuceve, indekse i CHECK ogranicenja. Tek kada odgovaraju, `alembic stamp`
+oznacava odgovarajucu reviziju bez kreiranja tabela ili menjanja podataka.
+`stamp` ne proverava niti popravlja semu i ne treba ga primenjivati naslepo.
+
+Postojeca lokalna baza ovog projekta je vec proverena prema pocetnoj migraciji
+i oznacena tom revizijom, uz ocuvanje svih dotadasnjih podataka.
+
+Ova prva iteracija menja strukturu i uvodi migracije. Preostala promena
+validacionih biblioteka, uklanjanje CHECK ogranicenja i ostale smernice
+refaktorisanja rade se u sledecim celinama.
 
 ## Automatizovani testovi
 
@@ -51,7 +121,7 @@ podatke iz `.env`. Baza u memoriji postoji samo tokom testiranja.
 
 Pokriveni su CRUD kategorija i transakcija, lista/filteri/paginacija, validacije,
 jedinstvenost i strani kljucevi u bazi, obnova sesije posle odbijenog upisa i
-priprema postojece baze.
+inicijalizacija, ponovljivost migracija i bezbedno odbijanje neversionisane baze.
 Testovi ukljucuju SQLite proveru stranih kljuceva. SQLite testovi nisu zamena za
 proveru PostgreSQL specificnosti; SQLite `lower()` podrazumevano obradjuje samo
 ASCII slova.

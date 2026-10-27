@@ -1,0 +1,27 @@
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+from sqlalchemy import Index, String, func
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from app.extensions import db
+
+if TYPE_CHECKING:
+    from app.models.transaction import Transaction
+
+
+class Category(db.Model):
+    __tablename__ = "category"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(30), nullable=False)
+    color: Mapped[str] = mapped_column(String(7), nullable=False)
+
+    transactions: Mapped[list[Transaction]] = relationship(
+        "Transaction", back_populates="category", passive_deletes="all"
+    )
+
+    __table_args__ = (
+        Index("uq_category_name_lower", func.lower(name), unique=True),
+    )

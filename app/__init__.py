@@ -1,15 +1,29 @@
 import os
 
 from flask import Flask
-from flask_sqlalchemy import SQLAlchemy
 from dotenv import load_dotenv
 
-load_dotenv()
+from app.extensions import db
 
-app = Flask(__name__)
 
-app.config["SQLALCHEMY_DATABASE_URI"] = os.getenv("DATABASE_URL")
+def create_app(config=None):
+    load_dotenv()
+    application = Flask(__name__)
+    application.config["SQLALCHEMY_DATABASE_URI"] = os.getenv("DATABASE_URL")
 
-db = SQLAlchemy(app)
+    if config is not None:
+        application.config.update(config)
 
-from app import models, routes, commands
+    db.init_app(application)
+
+    # Ucitavanje modela registruje tabele u zajednickom SQLAlchemy metadata.
+    from app import models
+    from app.api import register_blueprints
+    from app.commands import register_commands
+
+    register_blueprints(application)
+    register_commands(application)
+    return application
+
+
+app = create_app()
