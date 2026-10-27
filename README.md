@@ -3,7 +3,8 @@
 REST API za licni budzet, napravljen koristeci Flask i PostgreSQL. Projekat je u
 izradi: trenutno su implementirane kategorije, CRUD transakcija, lista
 transakcija sa filterima, sortiranjem i paginacijom, mesecni budzeti kategorija
-i mesecni pregled prihoda, rashoda i potrosnje naspram budzeta.
+i mesecni pregled prihoda, rashoda i potrosnje naspram budzeta, kao i CSV import
+transakcija do milion redova sa izvestajem o greskama.
 
 ## Pokretanje
 
@@ -53,6 +54,7 @@ app/
   api/
     categories.py      # rute kategorija
     transactions.py    # rute transakcija
+    csv_import.py      # upload CSV-a i slanje izvestaja
     budgets.py         # postavljanje, lista i uklanjanje budzeta
     summary.py         # mesecni pregled prihoda, rashoda i budzeta
     health.py          # pocetna provera rada
@@ -63,6 +65,9 @@ app/
     transaction.py     # seme transakcija, liste i filtera
     budget.py          # seme iznosa, meseca i odgovora budzeta
     summary.py         # seme mesecnog pregleda
+    csv_import.py      # seme CSV reda i izvestaja
+  services/
+    csv_import.py      # citanje, validacija i paketni upis CSV transakcija
   commands.py          # CLI komanda za migracije
 migrations/
   env.py               # povezivanje Alembic-a sa modelima i bazom
@@ -135,6 +140,7 @@ redove kategorija ili transakcija i ne dodaje poslovna CHECK ogranicenja.
 
 Mesecni pregled samo cita postojece tabele, pa za njega nije potrebna nova
 Alembic revizija niti posebna tabela sa sacuvanim zbirnim vrednostima.
+CSV import upisuje u postojecu tabelu transakcija i takodje ne menja semu baze.
 
 Konfiguracija ukljucuje Alembic-ov ugradjeni `checkconstraint_byname` dodatak,
 kako bi `revision --autogenerate` prepoznao uklanjanje imenovanih CHECK
@@ -198,9 +204,20 @@ Komanda za pokretanje svih testova:
 
 Testovi koriste Pythonov ugradjeni `unittest`. Pokriveni su CRUD kategorija i
 transakcija, lista/filteri/paginacija, budzeti po mesecu i kategoriji, mesecni
-pregled, Pydantic seme i poslovne validacije,
+pregled, CSV import sa izvestajem po redovima, Pydantic seme i poslovne validacije,
 jedinstvenost i strani kljucevi, centralni odgovori na greske, ciscenje sesije
 posle zahteva i Alembic migracije sa ocuvanjem podataka.
+
+Odvojena, sporija provera stvarnog importa milion redova:
+
+```powershell
+.\venv\Scripts\python.exe -B -m tests.benchmark_csv_import
+```
+
+Ona koristi istu izolovanu testnu semu, proverava broj sacuvanih transakcija,
+tacan decimalni zbir i ocuvanje ranije sacuvane transakcije. Ne pokrece se
+u redovnoj `unittest discover` komandi. Lokalno je CSV od 34.500.038 bajtova
+uvezen za oko 107 sekundi; vreme zavisi od racunara i PostgreSQL servera.
 
 ## Greske, sesija i logovanje
 
@@ -638,19 +655,95 @@ Svi iznosi su decimalni stringovi sa dve decimale. Zbirni iznosi nisu ograniceni
 na maksimum jedne transakcije. Pregled ne menja transakcije, budzete ni
 kategorije; zbirne vrednosti racuna baza nad postojecim podacima.
 
+## API: CSV import
+
+### POST /transactions/import
+
+Salje se `multipart/form-data` zahtev sa jednim fajlom u polju `file`.
+Fajl koristi UTF-8 kodiranje, sa opcionim BOM-om. Separator je zarez, a
+tekst koji sadrzi zarez, navodnike ili novi red koristi standardno CSV
+navodjenje dvostrukim navodnicima.
+
+Obavezne kolone su `type`, `amount`, `date` i `category`; `description` je
+opciona. Redosled kolona moze biti proizvoljan. Pocetni i zavrsni razmaci
+oko naziva kolona se uklanjaju. Nepoznate, ponovljene ili nedostajuce
+obavezne kolone odbijaju se sa `400`.
+
+Primer fajla `transactions.csv`, uz vec postojecu kategoriju `Hrana`:
+
+```csv
+type,amount,date,description,category
+expense,12.50,2026-10-08,Rucak,Hrana
+income,300.00,2026-10-09,,hrana
+expense,5.00,2026-10-10,Kafa,Nepostojeca
+```
+
+Primer slanja iz PowerShell-a:
+
+```powershell
+curl.exe -X POST "http://127.0.0.1:5000/transactions/import" -F "file=@transactions.csv" -o import-report.json
+```
+
+U Postman-u izabrati `Body > form-data`, kljuc `file` postaviti na tip
+`File` i odabrati CSV. `Content-Type` sa multipart granicom podesava klijent.
+
+Za svaku stavku vaze ista pravila tipa, iznosa, datuma i opisa kao za
+`POST /transactions`. CSV iznos je decimalni tekst sa tackom, bez okolnih
+razmaka; primer `12.500` nije dozvoljen. Prazan ili izostavljen opis cuva se
+kao `null`. Ostali razmaci u opisu se zadrzavaju.
+
+`category` sadrzi ime postojece kategorije, a ne njen ID. Okolni razmaci se
+uklanjaju, a ime se pronalazi nezavisno od velicine slova. Import ne kreira
+nove kategorije. Nepostojeca kategorija je greska samo tog reda. Broj
+vrednosti u redu mora odgovarati broju kolona zaglavlja; prazan red je
+takodje neuspesan red.
+
+Odgovor `200` za prikazani primer:
+
+```json
+{
+  "imported": 2,
+  "failed": 1,
+  "errors": [
+    {"row": 4, "error": "category: Category not found"}
+  ]
+}
+```
+
+`imported` je broj sacuvanih transakcija, a `failed` broj preskocenih redova.
+`errors` sadrzi broj svakog neuspelog reda i prvi razlog njegove greske,
+redosledom iz fajla. Zaglavlje je red 1, pa je prvi red podataka red 2.
+Brojevi oznacavaju CSV zapise: opis pod navodnicima koji sadrzi novi red
+i dalje pripada jednom zapisu.
+
+Dozvoljeno je najvise **1.000.000 redova podataka**, bez zaglavlja. Fajl samo
+sa ispravnim zaglavljem vraca `imported: 0`, `failed: 0` i `errors: []`.
+Nedostajuci fajl, prazan fajl, neispravan UTF-8, neispravna CSV struktura ili
+prekoracenje limita vracaju `400` sa JSON `error` porukom, bez novih upisa.
+Kada je struktura fajla ispravna, validni redovi se uvoze, a nevalidni
+prijavljuju u izvestaju. Odgovor je `200` i kada su svi redovi neuspesni.
+
+Fajl se prvo cita radi provere strukture i broja redova, a zatim ponovo za
+validaciju i upis u paketima od 1000 stavki. Ne ucitava se cela datoteka u
+memoriju. Izvestaj o greskama cuva se u privremenom fajlu i JSON odgovor se
+salje postepeno, pa i veliki broj gresaka ne zahteva listu svih gresaka u
+memoriji. Potreban prostor u privremenom direktorijumu zavisi od velicine
+fajla i izvestaja.
+
+Validni redovi jednog importa potvrdjuju se jednim `commit()` pozivom pre
+slanja izvestaja. Neocekivana greska baze vraca `500` i ponistava nove
+transakcije tog importa; ranije sacuvani podaci ostaju. Import ne brise niti
+menja postojece kategorije, transakcije ili budzete. Ponovljeno slanje istog
+fajla ponovo dodaje njegove validne transakcije.
+
 ## Status implementacije
 
 Zavrseni su kategorije, pojedinacni CRUD transakcija, njihova sortirana lista
 sa kombinovanim filterima i paginacijom, mesecni budzeti kategorija, mesecni
-pregled prihoda/rashoda/budzeta, modularna struktura, SQLAlchemy 2
+pregled prihoda/rashoda/budzeta, CSV import do milion redova, modularna struktura, SQLAlchemy 2
 modeli, Alembic migracije, Pydantic validacija/serijalizacija, centralna obrada
 gresaka, sesija po zahtevu i Loguru. Postoje testovi i dokumentacija tih delova.
-Projekat jos nije kompletan prema PDF zadatku.
-
-Preostale funkcionalnosti su:
-
-- CSV import do milion redova, sa prijavom neuspelih redova i razloga.
-- Testovi i dokumentacija novih celina, pa zavrsna provera svih zahteva PDF-a.
+Preostaje zavrsna provera svih zahteva PDF-a i dokumentacije pokretanja.
 
 Cist SQLAlchemy, `uv` i dodatni slojevi ostaju opcije za procenu, a ne uslov da
 se funkcionalnosti zadatka zavrse.

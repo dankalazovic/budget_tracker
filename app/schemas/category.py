@@ -1,16 +1,12 @@
 from typing import Annotated
 
-from pydantic import AfterValidator, Field, StrictStr, StringConstraints
+from pydantic import Field, StrictStr
 
-from app.schemas.common import Schema, valid_text
+from app.schemas.common import CategoryName, Schema
 
 
 class CategoryCreate(Schema):
-    name: Annotated[
-        StrictStr,
-        StringConstraints(strip_whitespace=True, min_length=1, max_length=30),
-        AfterValidator(valid_text),
-    ]
+    name: CategoryName
     color: Annotated[
         StrictStr, Field(min_length=7, max_length=7, pattern=r"^#[0-9A-Fa-f]{6}$")
     ]

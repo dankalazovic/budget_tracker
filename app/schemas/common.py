@@ -11,6 +11,7 @@ from pydantic import (
     Field,
     StrictInt,
     StrictStr,
+    StringConstraints,
 )
 
 from app.constants import ErrorMessage
@@ -23,6 +24,12 @@ class Schema(BaseModel):
     model_config = ConfigDict(
         extra="ignore", from_attributes=True, use_enum_values=True
     )
+
+
+def validation_message(error) -> str:
+    first = error.errors(include_input=False, include_context=False, include_url=False)[0]
+    field = ".".join(str(part) for part in first["loc"])
+    return f"{field}: {first['msg']}" if field else first["msg"]
 
 
 def valid_text(value: str) -> str:
@@ -78,6 +85,11 @@ def query_integer(value):
 
 
 CleanText = Annotated[StrictStr, AfterValidator(valid_text)]
+CategoryName = Annotated[
+    StrictStr,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=30),
+    AfterValidator(valid_text),
+]
 DatabaseID = Annotated[StrictInt, Field(gt=0, le=MAX_DATABASE_ID)]
 QueryInteger = Annotated[StrictInt, BeforeValidator(query_integer)]
 CalendarDate = Annotated[date, BeforeValidator(calendar_date)]

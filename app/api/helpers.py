@@ -5,6 +5,7 @@ from pydantic import ValidationError
 from werkzeug.exceptions import BadRequest
 
 from app.constants import ErrorMessage
+from app.schemas.common import validation_message
 
 
 def read_json_body():
@@ -33,9 +34,6 @@ def validate_input(schema, data):
     try:
         return schema.model_validate(data)
     except ValidationError as error:
-        first = error.errors(include_input=False, include_context=False, include_url=False)[0]
-        field = ".".join(str(part) for part in first["loc"])
-        message = f"{field}: {first['msg']}" if field else first["msg"]
-        raise BadRequest(message) from None
+        raise BadRequest(validation_message(error)) from None
 
 

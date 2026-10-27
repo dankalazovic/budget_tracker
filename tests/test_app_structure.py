@@ -26,6 +26,7 @@ class AppStructureTests(unittest.TestCase):
             "/categories": {"GET", "POST"},
             "/categories/<int:category_id>": {"PUT", "DELETE"},
             "/transactions": {"GET", "POST"},
+            "/transactions/import": {"POST"},
             "/transactions/<int:transaction_id>": {"GET", "PUT", "DELETE"},
             "/budgets": {"GET"},
             "/budgets/<month>/<int:category_id>": {"PUT", "DELETE"},

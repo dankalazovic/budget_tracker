@@ -22,17 +22,20 @@ class TransactionType(str, Enum):
     EXPENSE = "expense"
 
 
-class TransactionInput(Schema):
+class TransactionFields(Schema):
     type: TransactionType
     amount: Amount
     date: CalendarDate
-    category_id: DatabaseID
     description: Annotated[CleanText, Field(max_length=200)] | None = None
 
     @field_validator("description")
     @classmethod
     def empty_description(cls, value):
         return None if value == "" else value
+
+
+class TransactionInput(TransactionFields):
+    category_id: DatabaseID
 
 
 class TransactionResponse(Schema):
