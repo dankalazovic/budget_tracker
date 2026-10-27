@@ -1,18 +1,22 @@
 from datetime import date
 from decimal import Decimal
+from types import SimpleNamespace
 
 from tests import BaseTestCase
 from app import db
 from app.models import Category, Transaction
+from app.schemas import TransactionResponse
 
 
 class TransactionListTests(BaseTestCase):
     def setUp(self):
         super().setUp()
-        self.food = Category(name="Hrana", color="#123456")
-        self.work = Category(name="Posao", color="#FFFFFF")
-        db.session.add_all([self.food, self.work])
+        food = Category(name="Hrana", color="#123456")
+        work = Category(name="Posao", color="#FFFFFF")
+        db.session.add_all([food, work])
         db.session.commit()
+        self.food = SimpleNamespace(id=food.id)
+        self.work = SimpleNamespace(id=work.id)
 
     def create_transaction(self, **changes):
         values = {
@@ -26,7 +30,7 @@ class TransactionListTests(BaseTestCase):
         transaction = Transaction(**values)
         db.session.add(transaction)
         db.session.commit()
-        return transaction
+        return TransactionResponse.model_validate(transaction)
 
     def get_list(self, **params):
         response = self.client.get("/transactions", query_string=params)
@@ -46,7 +50,8 @@ class TransactionListTests(BaseTestCase):
 
         data = self.get_list()
 
-        self.assertEqual(data["items"], [transaction.to_dict()])
+        expected = TransactionResponse.model_validate(transaction).model_dump(mode="json")
+        self.assertEqual(data["items"], [expected])
         self.assertEqual(data["items"][0]["amount"], "12.50")
         self.assertEqual(data["items"][0]["date"], "2026-10-10")
         self.assertEqual(data["total"], 1)

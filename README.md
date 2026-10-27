@@ -41,6 +41,10 @@ postojece podatke. Aplikacija ne kreira tabele automatski pri pokretanju.
 app/
   __init__.py           # create_app i povezivanje delova aplikacije
   extensions.py         # zajednicki SQLAlchemy db i DeclarativeBase
+  database.py           # zivotni ciklus sesije tokom zahteva
+  errors.py             # centralna obrada HTTP i baza gresaka
+  constants.py          # zajednicke poruke, nazivi ogranicenja i konstante
+  logging.py            # Loguru konfiguracija
   models/
     category.py        # model kategorije
     transaction.py     # model transakcije
@@ -49,7 +53,10 @@ app/
     transactions.py    # rute transakcija
     health.py          # pocetna provera rada
     helpers.py         # zajednicki pomocni kod ruta
-  validation.py        # postojece validacije
+  schemas/
+    common.py          # zajednicki Pydantic tipovi i provere
+    category.py        # ulazne i izlazne seme kategorija
+    transaction.py     # seme transakcija, liste i filtera
   commands.py          # CLI komanda za migracije
 migrations/
   env.py               # povezivanje Alembic-a sa modelima i bazom
@@ -59,7 +66,7 @@ alembic.ini
 ```
 
 Rute su grupisane kroz Flask Blueprint-e. Blueprint organizuje rute jednog
-resursa; postojeci URL-ovi i JSON odgovori ostaju isti. `create_app()` pravi
+resursa; postojeci URL-ovi i oblik uspesnih JSON odgovora ostaju isti. `create_app()` pravi
 aplikaciju i registruje te grupe. Modeli koriste SQLAlchemy 2 `Mapped` i
 `mapped_column`, sa jednim fajlom po tabeli.
 
@@ -102,29 +109,105 @@ kljuceve, indekse i CHECK ogranicenja. Tek kada odgovaraju, `alembic stamp`
 oznacava odgovarajucu reviziju bez kreiranja tabela ili menjanja podataka.
 `stamp` ne proverava niti popravlja semu i ne treba ga primenjivati naslepo.
 
-Postojeca lokalna baza ovog projekta je vec proverena prema pocetnoj migraciji
-i oznacena tom revizijom, uz ocuvanje svih dotadasnjih podataka.
+Lanac migracija trenutno je:
 
-Ova prva iteracija menja strukturu i uvodi migracije. Preostala promena
-validacionih biblioteka, uklanjanje CHECK ogranicenja i ostale smernice
-refaktorisanja rade se u sledecim celinama.
+```text
+a128effd0953  Pocetna sema kategorija i transakcija
+      |
+4a0687671733  Uklonjena CHECK ogranicenja transakcija
+```
+
+Druga revizija uklanja samo imenovana CHECK ogranicenja za tip i opseg iznosa.
+Ne brise poslovne redove, kolone, strane kljuceve niti jedinstveni indeks
+kategorija. Poslovna pravila sada proveravaju Pydantic ulazne seme.
+
+Konfiguracija ukljucuje Alembic-ov ugradjeni `checkconstraint_byname` dodatak,
+kako bi `revision --autogenerate` prepoznao uklanjanje imenovanih CHECK
+ogranicenja. Revizija koristi generisani batch oblik: PostgreSQL izvrsava
+ALTER operacije. API i migracioni testovi koriste PostgreSQL.
+Generisana migracija se i dalje pregleda pre primene.
+
+## Validacija i serijalizacija kroz Pydantic
+
+SQLAlchemy model opisuje cuvanje podatka u bazi. Pydantic sema opisuje ulaz
+ili izlaz API-ja: dozvoljene tipove, vrednosti i format odgovora.
+
+`CategoryCreate` i `TransactionInput` proveravaju unos kroz
+`model_validate(data)`. Rezultat ima proverena, tipizirana polja: na primer,
+iznos je `Decimal`, a datum je Python `date`. Nepoznata ulazna polja se
+zanemaruju. Tip transakcije je enum sa vrednostima `income` i `expense`.
+
+`CategoryResponse`, `TransactionResponse` i `TransactionListResponse`
+pripremaju izlaz. Njihov `model_dump(mode="json")` pravi recnik pogodan za
+JSON odgovor, sa iznosom u obliku `"12.50"` i ISO datumom. Podesavanje
+`from_attributes=True` dozvoljava da sema procita atribute SQLAlchemy objekta,
+umesto da prvo rucno pravimo recnik za svako polje.
+
+JSON parser cita decimalne brojeve kao `Decimal` pre validacije. Time cuvamo
+sve poslate decimale i mozemo da odbijemo i unos poput `1.00000000000000001`,
+umesto da ga obican float parser prethodno skrati na `1.0`.
+
+Za delimicni PUT prvo spojimo postojece vrednosti sa poslatim poljima, pa
+validiramo ceo rezultat. Izostavljeno polje zadrzava vrednost; izricito `null`
+nije dozvoljeno za obavezna polja. Opis moze biti `null`.
+
+Seme ne pristupaju bazi. Da li kategorija sa zadatim ID-jem zaista postoji
+proverava ruta nakon validacije tipa ID-ja. FK i jedinstveni indeks ostaju
+zastita u bazi; direktan SQL upis zaobilazi Pydantic poslovne validacije.
+
+Neispravan ulaz se pretvara u `400` sa imenom polja i objasnjenjem. Izlazne
+greske seme ostaju serverske greske; ne predstavljaju se kao los korisnicki
+unos. URL-ovi i uspesni odgovori ostaju kao u dokumentaciji ispod.
 
 ## Automatizovani testovi
+
+Potreban je pokrenut PostgreSQL. API i migracioni testovi koriste zasebnu semu
+`tracker_test_<uuid>` koju naprave pre ucitavanja aplikacije. Na urednom zavrsetku
+test procesa ta sema se uklanja. Poslovne tabele van testne seme se ne menjaju.
+Korisnik baze mora imati dozvolu da kreira seme u izabranoj bazi.
+
+Konekcija se cita iz `TEST_DATABASE_URL` ako je zadat, inace iz `DATABASE_URL`
+u okruzenju ili lokalnom `.env`. Opciono se moze koristiti posebna testna baza:
+
+```powershell
+$env:TEST_DATABASE_URL = "postgresql://postgres:YOUR_PASSWORD@localhost:5432/budget_tracker_test"
+```
+
+Komanda za pokretanje svih testova:
 
 ```powershell
 .\venv\Scripts\python.exe -m unittest discover -s tests -t . -v
 ```
 
-Testovi koriste Pythonov ugradjeni `unittest` i zasebnu SQLite bazu u memoriji.
-Postavljaju testnu konekciju pre ucitavanja aplikacije i ne koriste PostgreSQL
-podatke iz `.env`. Baza u memoriji postoji samo tokom testiranja.
+Testovi koriste Pythonov ugradjeni `unittest`. Pokriveni su CRUD kategorija i
+transakcija, lista/filteri/paginacija, Pydantic seme, poslovne validacije,
+jedinstvenost i strani kljucevi, centralni odgovori na greske, ciscenje sesije
+posle zahteva i Alembic migracije sa ocuvanjem podataka.
 
-Pokriveni su CRUD kategorija i transakcija, lista/filteri/paginacija, validacije,
-jedinstvenost i strani kljucevi u bazi, obnova sesije posle odbijenog upisa i
-inicijalizacija, ponovljivost migracija i bezbedno odbijanje neversionisane baze.
-Testovi ukljucuju SQLite proveru stranih kljuceva. SQLite testovi nisu zamena za
-proveru PostgreSQL specificnosti; SQLite `lower()` podrazumevano obradjuje samo
-ASCII slova.
+## Greske, sesija i logovanje
+
+Greske imaju JSON oblik `{"error": "opis"}`. Centralni handler obradjuje
+Werkzeug HTTP izuzetke i PostgreSQL greske ogranicenja. HTTP zaglavlja se
+zadrzavaju, ukljucujuci `Allow` kod odgovora `405`. Nepoznata interna greska
+vraca `500` sa generickom porukom `Internal server error`, bez SQL upita,
+parametara ili detalja exception-a u odgovoru.
+
+Poslovne poruke i nazivi ogranicenja definisani su u `app/constants.py`, a
+statusi se koriste kroz `HTTPStatus`. Jedinstvenost imena kategorije daje
+`409`; nepostojeca kategorija pri upisu transakcije daje `400`, a pokusaj
+brisanja kategorije sa transakcijama daje `409`.
+
+Na pocetku zahteva inicijalizuje se SQLAlchemy sesija. Rute eksplicitno
+pozivaju `commit()` posle uspesne promene. Teardown zahteva radi `rollback()`
+preostalog nepotvrdjenog rada i uklanja sesiju pomocu `remove()`. Time se
+pokrivaju i vec obradjene greske, a prethodno potvrdeni commit ostaje sacuvan.
+Engine i pool konekcija su zajednicki; aktivna sesija se ne deli izmedju zahteva.
+
+Loguru podrazumevano zapisuje `INFO` i vise nivoe na standardni izlaz za greske
+(`stderr`). Zapisi zahteva koriste metod, sablon rute i status. Za interne
+greske zapisuje se tip exception-a. U logove ne upisujemo telo zahteva, query
+parametre, lozinke, konekcioni URL niti SQL parametre. Log fajlovi se ne prave.
+Nivo logovanja podesava se promenljivom `LOG_LEVEL`, npr. `INFO` ili `ERROR`.
 
 ## API: kategorije
 
@@ -196,7 +279,7 @@ ostaju sacuvane. Brisanje budzeta uz kategoriju bice dodato sa modelom budzeta.
 
 | Status | Znacenje | Primer odgovora |
 | --- | --- | --- |
-| `400` | Neispravan JSON ili polja | `{"error": "Color must be in #RRGGBB format"}` |
+| `400` | Neispravan JSON ili polja | `{"error": "name: String should have at least 1 character"}` |
 | `404` | Kategorija sa zadatim ID-jem ne postoji | `{"error": "Category not found"}` |
 | `409` | Naziv je vec zauzet | `{"error": "Category already exists"}` |
 | `409` | Kategorija ima transakcije | `{"error": "Category has transactions and cannot be deleted"}` |
@@ -218,8 +301,9 @@ koja ima transakcije.
 
 Iznos se u Pythonu obradjuje kao `Decimal`, a u bazi kao `Numeric(9, 2)`.
 `9` oznacava ukupan broj cifara, a `2` broj cifara iza decimalne tacke.
-Posebno ogranicenje u bazi zahteva `0 < amount <= 1000000`.
-Provera pre upisa odbija vise od dve decimale umesto zaokruzivanja.
+Pydantic sema zahteva `0 < amount <= 1000000` i odbija vise od dve decimale
+pre upisa, umesto zaokruzivanja. CHECK pravila za tip i iznos uklanja druga
+migracija; ova poslovna validacija obavlja se u kodu.
 
 ## API: transakcije
 
@@ -337,7 +421,7 @@ Paginaciju radi baza; ne ucitava se cela lista u Python da bi se zatim delila.
 Neispravni parametri vracaju `400` i objasnjenje, na primer:
 
 ```json
-{"error": "per_page must be an integer between 1 and 100"}
+{"error": "per_page: Input should be less than or equal to 100"}
 ```
 
 Brojevni parametri koriste cifre 0-9, bez razmaka, decimalne tacke ili znaka.
@@ -388,11 +472,24 @@ ostaje sacuvana. Nepostojeca transakcija vraca `404`.
 | Status | Znacenje | Primer odgovora |
 | --- | --- | --- |
 | `400` | Neispravan JSON | `{"error": "Invalid JSON data"}` |
-| `400` | Neispravna vrednost polja | `{"error": "Amount must have at most 2 decimal places"}` |
+| `400` | Neispravna vrednost polja | `{"error": "amount: Value error, Amount must have at most 2 decimal places"}` |
 | `400` | Navedena kategorija ne postoji | `{"error": "Category not found"}` |
 | `404` | Transakcija ne postoji | `{"error": "Transaction not found"}` |
 
-## Preostali delovi zadatka
+## Status implementacije
 
-Budzeti, mesecni pregled i CSV import jos nisu implementirani. Njihova
-dokumentacija i testovi bice dodavani uz implementaciju.
+Zavrseni su kategorije, pojedinacni CRUD transakcija, njihova sortirana lista
+sa kombinovanim filterima i paginacijom, modularna struktura, SQLAlchemy 2
+modeli, Alembic migracije, Pydantic validacija/serijalizacija, centralna obrada
+gresaka, sesija po zahtevu i Loguru. Postoje testovi i dokumentacija tih delova.
+Projekat jos nije kompletan prema PDF zadatku.
+
+Preostale funkcionalnosti su:
+
+- Budzeti po kategoriji i mesecu, uz najvise jedan budzet za tu kombinaciju.
+- Mesecni pregled prihoda, rashoda, salda i potrosnje naspram budzeta.
+- CSV import do milion redova, sa prijavom neuspelih redova i razloga.
+- Testovi i dokumentacija novih celina, pa zavrsna provera svih zahteva PDF-a.
+
+Cist SQLAlchemy, `uv` i dodatni slojevi ostaju opcije za procenu, a ne uslov da
+se funkcionalnosti zadatka zavrse.

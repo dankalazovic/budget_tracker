@@ -37,7 +37,7 @@ class CategoryTests(BaseTestCase):
                 self.assertEqual(response.status_code, 400)
                 self.assertIn("error", response.get_json())
 
-        self.assertEqual(db.session.query(Category).count(), 0)
+        self.assertEqual(db.session.scalar(db.select(db.func.count()).select_from(Category)), 0)
 
     def test_create_and_update_reject_invalid_json(self):
         category = self.create_category()
@@ -62,7 +62,7 @@ class CategoryTests(BaseTestCase):
                 )
                 self.assertEqual(response.status_code, 400)
 
-        self.assertEqual(db.session.query(Category).count(), 1)
+        self.assertEqual(db.session.scalar(db.select(db.func.count()).select_from(Category)), 1)
 
     def test_create_and_update_reject_invalid_names(self):
         category = self.create_category()
@@ -82,7 +82,7 @@ class CategoryTests(BaseTestCase):
                     self.assertEqual(response.status_code, 400)
                     self.assertIn("error", response.get_json())
 
-        self.assertEqual(db.session.query(Category).count(), 1)
+        self.assertEqual(db.session.scalar(db.select(db.func.count()).select_from(Category)), 1)
         self.assertEqual(db.session.get(Category, category["id"]).name, "Hrana")
 
     def test_create_and_update_reject_invalid_colors(self):
@@ -102,7 +102,7 @@ class CategoryTests(BaseTestCase):
                     self.assertEqual(response.status_code, 400)
                     self.assertIn("error", response.get_json())
 
-        self.assertEqual(db.session.query(Category).count(), 1)
+        self.assertEqual(db.session.scalar(db.select(db.func.count()).select_from(Category)), 1)
         self.assertEqual(db.session.get(Category, category["id"]).color, "#FF8800")
 
     def test_list_categories_returns_empty_list(self):
@@ -133,7 +133,7 @@ class CategoryTests(BaseTestCase):
                     response.get_json(), {"error": "Category already exists"}
                 )
 
-        self.assertEqual(db.session.query(Category).count(), 1)
+        self.assertEqual(db.session.scalar(db.select(db.func.count()).select_from(Category)), 1)
 
     def test_update_category_changes_both_fields(self):
         category = self.create_category()
@@ -172,7 +172,7 @@ class CategoryTests(BaseTestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.get_json()["name"], "HRANA")
-        self.assertEqual(db.session.query(Category).count(), 1)
+        self.assertEqual(db.session.scalar(db.select(db.func.count()).select_from(Category)), 1)
 
     def test_update_category_rejects_another_category_name(self):
         self.create_category("Hrana")
@@ -223,7 +223,7 @@ class CategoryTests(BaseTestCase):
             db.session.commit()
 
         db.session.rollback()
-        self.assertEqual(db.session.query(Category).count(), 1)
+        self.assertEqual(db.session.scalar(db.select(db.func.count()).select_from(Category)), 1)
 
     def test_database_rejects_case_insensitive_duplicate_update(self):
         self.create_category("Hrana")
@@ -236,7 +236,7 @@ class CategoryTests(BaseTestCase):
 
         db.session.rollback()
         self.assertEqual(stored.name, "Prevoz")
-        self.assertEqual(db.session.query(Category).count(), 2)
+        self.assertEqual(db.session.scalar(db.select(db.func.count()).select_from(Category)), 2)
 
     def test_create_conflict_after_precheck_returns_409_and_rolls_back(self):
         original = self.create_category("Hrana")
@@ -257,7 +257,7 @@ class CategoryTests(BaseTestCase):
 
         # Sledeći upis uspeva samo ako je neuspešna transakcija poništena.
         self.create_category("Prevoz")
-        self.assertEqual(db.session.query(Category).count(), 2)
+        self.assertEqual(db.session.scalar(db.select(db.func.count()).select_from(Category)), 2)
 
     def test_update_conflict_after_precheck_returns_409_and_rolls_back(self):
         hrana = self.create_category("Hrana")
@@ -280,4 +280,4 @@ class CategoryTests(BaseTestCase):
         )
 
         self.create_category("Stan")
-        self.assertEqual(db.session.query(Category).count(), 3)
+        self.assertEqual(db.session.scalar(db.select(db.func.count()).select_from(Category)), 3)

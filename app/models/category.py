@@ -6,6 +6,7 @@ from sqlalchemy import Index, String, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.extensions import db
+from app.constants import ConstraintName
 
 if TYPE_CHECKING:
     from app.models.transaction import Transaction
@@ -23,5 +24,5 @@ class Category(db.Model):
     )
 
     __table_args__ = (
-        Index("uq_category_name_lower", func.lower(name), unique=True),
+        Index(ConstraintName.CATEGORY_NAME.value, func.lower(name), unique=True),
     )

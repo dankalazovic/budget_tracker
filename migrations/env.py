@@ -16,6 +16,10 @@ if config.config_file_name is not None:
 
 load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 target_metadata = db.metadata
+AUTOGENERATE_PLUGINS = (
+    "alembic.autogenerate.*",
+    "alembic.ext.checkconstraint_byname",
+)
 
 
 def run_migrations(connection):
@@ -23,6 +27,8 @@ def run_migrations(connection):
         connection=connection,
         target_metadata=target_metadata,
         compare_type=True,
+        autogenerate_plugins=AUTOGENERATE_PLUGINS,
+        render_as_batch=True,
     )
     with context.begin_transaction():
         context.run_migrations()
@@ -35,6 +41,8 @@ def run_migrations_offline():
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
         compare_type=True,
+        autogenerate_plugins=AUTOGENERATE_PLUGINS,
+        render_as_batch=True,
     )
     with context.begin_transaction():
         context.run_migrations()

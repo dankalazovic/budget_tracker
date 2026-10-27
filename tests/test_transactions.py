@@ -3,6 +3,7 @@ from datetime import date
 from decimal import Decimal
 from unittest.mock import patch
 
+from sqlalchemy import inspect
 from sqlalchemy.exc import IntegrityError
 
 from tests import BaseTestCase
@@ -11,6 +12,19 @@ from app.models import Category, Transaction
 
 
 class TransactionTests(BaseTestCase):
+    def test_invalid_stored_output_is_not_treated_as_invalid_request(self):
+        transaction = Transaction(
+            type="other", amount=Decimal("12.50"), date=date(2026, 10, 27),
+            category_id=self.category["id"],
+        )
+        db.session.add(transaction)
+        db.session.commit()
+
+        response = self.client.get(f"/transactions/{transaction.id}")
+
+        self.assertEqual(response.status_code, 500)
+        self.assertEqual(response.get_json(), {"error": "Internal server error"})
+
     def setUp(self):
         super().setUp()
         response = self.client.post(
@@ -275,26 +289,16 @@ class TransactionTests(BaseTestCase):
             self.client.delete(f"/categories/{self.category['id']}").status_code, 204
         )
 
-    def test_database_rejects_invalid_type_amount_and_missing_category(self):
-        invalid_values = (
-            {"type": "other"}, {"amount": Decimal("0")},
-            {"amount": Decimal("-0.01")}, {"amount": Decimal("1000000.01")},
-            {"category_id": 999},
-        )
-        for changes in invalid_values:
-            with self.subTest(changes=changes):
-                data = {
-                    "type": "expense", "amount": Decimal("12.50"),
-                    "date": date(2026, 10, 27), "category_id": self.category["id"],
-                }
-                data.update(changes)
-                db.session.add(Transaction(**data))
+    def test_database_keeps_foreign_key_without_business_check_constraints(self):
+        self.assertEqual(inspect(db.engine).get_check_constraints("transactions"), [])
+        db.session.add(Transaction(
+            type="expense", amount=Decimal("12.50"),
+            date=date(2026, 10, 27), category_id=999,
+        ))
+        with self.assertRaises(IntegrityError):
+            db.session.commit()
 
-                with self.assertRaises(IntegrityError):
-                    db.session.commit()
-
-                db.session.rollback()
-
+        db.session.rollback()
         self.assertEqual(db.session.execute(db.select(Transaction)).scalars().all(), [])
 
     def test_database_prevents_deleting_category_with_loaded_transactions(self):

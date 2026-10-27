@@ -1,6 +1,7 @@
 from datetime import date
 from decimal import Decimal
 
+from alembic import command
 from alembic.runtime.migration import MigrationContext
 from alembic.script import ScriptDirectory
 from sqlalchemy import inspect
@@ -8,6 +9,7 @@ from sqlalchemy import inspect
 from app import app, db
 from app.commands import migration_config
 from app.models import Category, Transaction
+from app.schemas import TransactionResponse
 from tests import BaseTestCase
 
 
@@ -38,6 +40,8 @@ class InitDatabaseTests(BaseTestCase):
         with db.engine.connect() as connection:
             revision = MigrationContext.configure(connection).get_current_revision()
         self.assertEqual(revision, expected_revision)
+        self.assertEqual(inspect(db.engine).get_check_constraints("transactions"), [])
+        self.assertEqual(len(inspect(db.engine).get_foreign_keys("transactions")), 1)
 
     def test_repeated_upgrade_preserves_existing_rows_and_ids(self):
         self.start_with_empty_database()
@@ -58,7 +62,7 @@ class InitDatabaseTests(BaseTestCase):
         )
         db.session.add(transaction)
         db.session.commit()
-        original_transaction = transaction.to_dict()
+        original_transaction = TransactionResponse.model_validate(transaction).model_dump(mode="json")
         db.session.remove()
 
         for _ in range(2):
@@ -68,9 +72,48 @@ class InitDatabaseTests(BaseTestCase):
         saved_category = db.session.get(Category, 17)
         self.assertEqual((saved_category.name, saved_category.color), ("Hrana", "#123456"))
         saved_transaction = db.session.get(Transaction, 29)
-        self.assertEqual(saved_transaction.to_dict(), original_transaction)
+        saved_data = TransactionResponse.model_validate(saved_transaction).model_dump(mode="json")
+        self.assertEqual(saved_data, original_transaction)
         self.assertEqual(len(db.session.execute(db.select(Category)).scalars().all()), 1)
         self.assertEqual(len(db.session.execute(db.select(Transaction)).scalars().all()), 1)
+
+    def test_removing_checks_preserves_existing_data_and_foreign_key(self):
+        self.start_with_empty_database()
+        with db.engine.begin() as connection:
+            command.upgrade(migration_config(connection), "a128effd0953")
+
+        initial_checks = inspect(db.engine).get_check_constraints("transactions")
+        self.assertEqual(
+            {constraint["name"] for constraint in initial_checks},
+            {"ck_transaction_type", "ck_transaction_amount"},
+        )
+        category = Category(id=17, name="Hrana", color="#123456")
+        transaction = Transaction(
+            id=29,
+            type="expense",
+            amount=Decimal("12.50"),
+            date=date(2026, 10, 27),
+            description="Rucak",
+            category=category,
+        )
+        db.session.add(transaction)
+        db.session.commit()
+        original = TransactionResponse.model_validate(transaction).model_dump(mode="json")
+        db.session.remove()
+
+        result = app.test_cli_runner().invoke(args=["init-db"])
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertEqual(inspect(db.engine).get_check_constraints("transactions"), [])
+        foreign_keys = inspect(db.engine).get_foreign_keys("transactions")
+        self.assertEqual(len(foreign_keys), 1)
+        self.assertEqual(foreign_keys[0]["referred_table"], "category")
+        self.assertEqual(foreign_keys[0]["constrained_columns"], ["category_id"])
+        saved = db.session.get(Transaction, 29)
+        self.assertEqual(
+            TransactionResponse.model_validate(saved).model_dump(mode="json"), original
+        )
+        self.assertEqual(db.session.get(Category, 17).name, "Hrana")
 
     def test_unversioned_database_with_data_is_rejected_without_changes(self):
         category = Category(id=17, name="Hrana", color="#123456")
