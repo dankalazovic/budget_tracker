@@ -14,6 +14,8 @@ class BaseTestCase(unittest.TestCase):
         self.app_context.push()
         self.assertEqual(db.engine.dialect.name, "sqlite")
         self.assertEqual(db.engine.url.database, ":memory:")
+        with db.engine.connect() as connection:
+            connection.exec_driver_sql("PRAGMA foreign_keys = ON")
         db.create_all()
         self.client = app.test_client()
 

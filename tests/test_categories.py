@@ -192,16 +192,17 @@ class CategoryTests(BaseTestCase):
         self.assertEqual(stored.color, prevoz["color"])
 
     def test_update_and_delete_missing_category_return_404(self):
-        for method in ("PUT", "DELETE"):
-            with self.subTest(method=method):
-                response = self.client.open(
-                    "/categories/999", method=method,
-                    json={"name": "Hrana", "color": "#123456"}
-                )
-                self.assertEqual(response.status_code, 404)
-                self.assertEqual(
-                    response.get_json(), {"error": "Category not found"}
-                )
+        for category_id in (0, 999, 2147483648, 10 ** 100):
+            for method in ("PUT", "DELETE"):
+                with self.subTest(method=method, category_id=category_id):
+                    response = self.client.open(
+                        f"/categories/{category_id}", method=method,
+                        json={"name": "Hrana", "color": "#123456"}
+                    )
+                    self.assertEqual(response.status_code, 404)
+                    self.assertEqual(
+                        response.get_json(), {"error": "Category not found"}
+                    )
 
     def test_delete_category_removes_only_requested_category(self):
         hrana = self.create_category("Hrana")
