@@ -1,7 +1,7 @@
 import json
 from datetime import date
 from decimal import Decimal
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from sqlalchemy import inspect
 from sqlalchemy.exc import IntegrityError
@@ -305,11 +305,11 @@ class TransactionTests(BaseTestCase):
         created = self.create_transaction()
         category = db.session.get(Category, self.category["id"])
         self.assertEqual(len(category.transactions), 1)
-        db.session.delete(category)
-
-        with self.assertRaises(IntegrityError):
+        with self.assertRaises(IntegrityError) as caught:
+            db.session.execute(db.delete(Category).where(Category.id == category.id))
             db.session.commit()
 
+        self.assertEqual(caught.exception.orig.diag.constraint_name, "fk_transaction_category")
         db.session.rollback()
         self.assertIsNotNone(db.session.get(Category, self.category["id"]))
         self.assertIsNotNone(db.session.get(Transaction, created["id"]))
@@ -361,12 +361,18 @@ class TransactionTests(BaseTestCase):
 
     def test_delete_category_handles_transaction_added_after_precheck(self):
         original = self.create_transaction()
+        real_execute = db.session.execute
+
+        def miss_transaction_select(statement, *args, **kwargs):
+            if statement.is_select:
+                result = Mock()
+                result.scalar_one_or_none.return_value = None
+                return result
+            return real_execute(statement, *args, **kwargs)
 
         # Pocetna provera ne vidi transakciju, ali baza i dalje stiti kategoriju.
-        with patch.object(db.session, "execute") as execute:
-            execute.return_value.scalar_one_or_none.return_value = None
+        with patch.object(db.session, "execute", side_effect=miss_transaction_select):
             response = self.client.delete(f"/categories/{self.category['id']}")
-            execute.assert_called_once()
 
         self.assertEqual(response.status_code, 409)
         self.assertIn("error", response.get_json())

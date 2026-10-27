@@ -60,13 +60,14 @@ def update_category(category_id):
 
 @categories_bp.route("/categories/<int:category_id>", methods=["DELETE"])
 def delete_category(category_id):
-    category = db.get_or_404(Category, category_id, description=ErrorMessage.CATEGORY_NOT_FOUND)
+    db.get_or_404(Category, category_id, description=ErrorMessage.CATEGORY_NOT_FOUND)
     transaction_id = db.session.execute(
         db.select(Transaction.id).where(Transaction.category_id == category_id).limit(1)
     ).scalar_one_or_none()
     if transaction_id is not None:
         raise Conflict(ErrorMessage.CATEGORY_HAS_TRANSACTIONS)
 
-    db.session.delete(category)
+    # Direktan DELETE prepusta RESTRICT/CASCADE pravilima baze povezane redove.
+    db.session.execute(db.delete(Category).where(Category.id == category_id))
     db.session.commit()
     return "", HTTPStatus.NO_CONTENT

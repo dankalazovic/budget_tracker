@@ -1,10 +1,11 @@
 # Budget Tracker API
 
-REST API za licni budzet, napravljen koristeci Flask i PostgreSQL. Projekat je u
-izradi: trenutno su implementirane kategorije, CRUD transakcija, lista
+REST API za licni budzet, napravljen koristeci Flask i PostgreSQL. Implementirane
+su kategorije, CRUD transakcija, lista
 transakcija sa filterima, sortiranjem i paginacijom, mesecni budzeti kategorija
 i mesecni pregled prihoda, rashoda i potrosnje naspram budzeta, kao i CSV import
-transakcija do milion redova sa izvestajem o greskama.
+transakcija do milion redova sa izvestajem o greskama. API je namenjen jednom
+korisniku, bez prijavljivanja. Svi iznosi su u evrima (EUR).
 
 ## Pokretanje
 
@@ -36,6 +37,13 @@ API je dostupan na `http://127.0.0.1:5000`.
 `init-db` pokrece Alembic `upgrade head`: primenjuje verzionisane migracije na
 praznu ili vec verzionisanu bazu. Ponovljen poziv bez novih migracija ne menja
 postojece podatke. Aplikacija ne kreira tabele automatski pri pokretanju.
+
+### Priprema baze i izraz `data command`
+
+Postojeca komanda za pripremu baze je `flask --app app init-db`, prikazana iznad.
+Ona primenjuje migracije i ne dodaje probne kategorije, transakcije ili budzete.
+Izraz `data command` u specifikaciji nije dodatno definisan; posebna komanda za
+demo podatke ili resetovanje baze nije pretpostavljena.
 
 ## Struktura projekta
 
@@ -128,6 +136,8 @@ a128effd0953  Pocetna sema kategorija i transakcija
 4a0687671733  Uklonjena CHECK ogranicenja transakcija
       |
 43a98f115024  Dodati budzeti po kategoriji i mesecu
+      |
+5814fafb384a  Prosirene tekstualne kolone
 ```
 
 Druga revizija uklanja samo imenovana CHECK ogranicenja za tip i opseg iznosa.
@@ -137,6 +147,12 @@ kategorija. Poslovna pravila sada proveravaju Pydantic ulazne seme.
 Treca revizija dodaje tabelu `budgets`, strani kljuc ka kategoriji sa
 `ON DELETE CASCADE` i jedinstvenost para kategorija/mesec. Ne menja postojece
 redove kategorija ili transakcija i ne dodaje poslovna CHECK ogranicenja.
+
+Cetvrta revizija prosiruje tekstualne kolone: ime i boja kategorije i tip
+transakcije imaju 256 znakova, a opis 512. Pydantic i dalje proverava ime
+do 30 znakova, boju `#RRGGBB`, tip `income`/`expense` i opis do 200 znakova.
+Kapacitet kolone ne menja dozvoljeni API unos. Revizija koristi ALTER COLUMN
+i cuva postojece redove, ID-jeve, kljuceve i indekse.
 
 Mesecni pregled samo cita postojece tabele, pa za njega nije potrebna nova
 Alembic revizija niti posebna tabela sa sacuvanim zbirnim vrednostima.
@@ -207,6 +223,8 @@ transakcija, lista/filteri/paginacija, budzeti po mesecu i kategoriji, mesecni
 pregled, CSV import sa izvestajem po redovima, Pydantic seme i poslovne validacije,
 jedinstvenost i strani kljucevi, centralni odgovori na greske, ciscenje sesije
 posle zahteva i Alembic migracije sa ocuvanjem podataka.
+Proverava se i citanje istih podataka iz nove Flask aplikacije sa novim
+engine-om i pool-om konekcija, bez ponovnog kreiranja tabela.
 
 Odvojena, sporija provera stvarnog importa milion redova:
 
@@ -720,6 +738,9 @@ Dozvoljeno je najvise **1.000.000 redova podataka**, bez zaglavlja. Fajl samo
 sa ispravnim zaglavljem vraca `imported: 0`, `failed: 0` i `errors: []`.
 Nedostajuci fajl, prazan fajl, neispravan UTF-8, neispravna CSV struktura ili
 prekoracenje limita vracaju `400` sa JSON `error` porukom, bez novih upisa.
+Prekoracenje ogranicenja CSV parsera za jedno polje takodje odbija ceo fajl
+sa `400`. Parser podrazumevano prihvata do 131.072 znaka po polju; validni
+opisi do 200 znakova i nazivi kategorija do 30 znakova su ispod tog limita.
 Kada je struktura fajla ispravna, validni redovi se uvoze, a nevalidni
 prijavljuju u izvestaju. Odgovor je `200` i kada su svi redovi neuspesni.
 
@@ -743,7 +764,6 @@ sa kombinovanim filterima i paginacijom, mesecni budzeti kategorija, mesecni
 pregled prihoda/rashoda/budzeta, CSV import do milion redova, modularna struktura, SQLAlchemy 2
 modeli, Alembic migracije, Pydantic validacija/serijalizacija, centralna obrada
 gresaka, sesija po zahtevu i Loguru. Postoje testovi i dokumentacija tih delova.
-Preostaje zavrsna provera svih zahteva PDF-a i dokumentacije pokretanja.
-
-Cist SQLAlchemy, `uv` i dodatni slojevi ostaju opcije za procenu, a ne uslov da
-se funkcionalnosti zadatka zavrse.
+Zavrsna provera obuhvata sve navedene funkcionalnosti, ocuvanje podataka pri
+migracijama i ponovno citanje nakon kreiranja nove aplikacije i pool-a.
+Nejasan izraz `data command` objasnjen je u odeljku o pripremi baze.

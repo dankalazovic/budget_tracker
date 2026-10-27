@@ -1,6 +1,6 @@
 from datetime import date
 from decimal import Decimal
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from sqlalchemy.exc import IntegrityError
 
@@ -276,10 +276,17 @@ class BudgetTests(BaseTestCase):
             "type": "expense", "amount": "12.50", "date": "2026-10-27",
             "category_id": self.food["id"],
         }).get_json()
+        real_execute = db.session.execute
+
+        def miss_transaction_select(statement, *args, **kwargs):
+            if statement.is_select:
+                result = Mock()
+                result.scalar_one_or_none.return_value = None
+                return result
+            return real_execute(statement, *args, **kwargs)
 
         # Ako se transakcija pojavi posle provere, baza i dalje stiti sve podatke.
-        with patch.object(db.session, "execute") as execute:
-            execute.return_value.scalar_one_or_none.return_value = None
+        with patch.object(db.session, "execute", side_effect=miss_transaction_select):
             response = self.client.delete(f"/categories/{self.food['id']}")
 
         self.assertEqual(response.status_code, 409)

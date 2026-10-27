@@ -11,6 +11,7 @@ from werkzeug.datastructures import MultiDict
 
 from tests import BaseTestCase
 from app import db
+from app.constants import ErrorMessage
 from app.models import Category, Transaction
 
 
@@ -271,6 +272,25 @@ class CsvImportTests(BaseTestCase):
             response = self.upload(content)
 
         self.assertEqual(response.status_code, 400, response.get_json())
+        self.assertEqual(len(self.transactions()), 1)
+        self.assertEqual(self.client.get(f"/transactions/{original['id']}").get_json(), original)
+
+    def test_field_above_parser_limit_rejects_file_before_any_insert(self):
+        original = self.create_original()
+        content = self.csv_bytes([
+            self.row(), self.row(), self.row(), self.row(),
+            self.row(description="A" * (csv.field_size_limit() + 1)),
+        ])
+
+        with patch("app.services.csv_import.CSV_BATCH_SIZE", 2):
+            with patch("app.services.csv_import.TemporaryFile", side_effect=self.capture_report_file):
+                with patch.object(db.session, "execute", wraps=db.session.execute) as execute:
+                    response = self.upload(content)
+                    execute.assert_not_called()
+
+        self.assertEqual(response.status_code, 400, response.get_json())
+        self.assertEqual(response.get_json(), {"error": ErrorMessage.CSV_FORMAT})
+        self.assertTrue(self.report_file.closed)
         self.assertEqual(len(self.transactions()), 1)
         self.assertEqual(self.client.get(f"/transactions/{original['id']}").get_json(), original)
 

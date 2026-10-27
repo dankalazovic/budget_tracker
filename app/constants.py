@@ -21,7 +21,7 @@ class ErrorMessage(StrEnum):
     BUDGET_EXISTS = "Budget already exists for this category and month"
     CSV_FILE_REQUIRED = "Upload exactly one CSV file in the file field"
     CSV_HEADER = "CSV header must contain type, amount, date, category and optionally description"
-    CSV_FORMAT = "File must be valid UTF-8 CSV with comma-separated columns"
+    CSV_FORMAT = "File must be valid UTF-8 CSV within parser field limits"
     CSV_ROW_LIMIT = "CSV must contain at most {limit} data rows"
     CSV_COLUMNS = "Row must have the same number of columns as the header"
 
@@ -40,3 +40,5 @@ CSV_MAX_ROWS = 1_000_000
 CSV_BATCH_SIZE = 1_000
 CSV_REQUIRED_COLUMNS = frozenset({"type", "amount", "date", "category"})
 CSV_OPTIONAL_COLUMNS = frozenset({"description"})
+TEXT_COLUMN_LENGTH = 256
+DESCRIPTION_COLUMN_LENGTH = 512

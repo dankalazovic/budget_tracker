@@ -8,7 +8,7 @@ from sqlalchemy import inspect
 
 from app import app, db
 from app.commands import migration_config
-from app.models import Category, Transaction
+from app.models import Budget, Category, Transaction
 from app.schemas import TransactionResponse
 from tests import BaseTestCase
 
@@ -153,6 +153,82 @@ class InitDatabaseTests(BaseTestCase):
             TransactionResponse.model_validate(db.session.get(Transaction, 29)).model_dump(mode="json"),
             original,
         )
+
+    def test_wider_text_columns_preserve_all_rows_keys_and_business_limits(self):
+        self.start_with_empty_database()
+        with db.engine.begin() as connection:
+            command.upgrade(migration_config(connection), "43a98f115024")
+
+        inspector = inspect(db.engine)
+        old_lengths = {
+            column["name"]: column["type"].length
+            for column in inspector.get_columns("category")
+            if column["name"] in ("name", "color")
+        }
+        self.assertEqual(old_lengths, {"name": 30, "color": 7})
+        category = Category(id=17, name="Štednja", color="#12aBcD")
+        transaction = Transaction(
+            id=29, type="expense", amount=Decimal("12.50"),
+            date=date(2026, 10, 27), description="Čaj i ručak", category=category,
+        )
+        budget = Budget(
+            id=31, month=date(2026, 10, 1), amount=Decimal("200.00"), category=category,
+        )
+        db.session.add_all([transaction, budget])
+        db.session.commit()
+
+        def rows():
+            return {
+                model.__tablename__: db.session.execute(
+                    db.select(model.__table__).order_by(model.id)
+                ).all()
+                for model in (Category, Transaction, Budget)
+            }
+
+        def keys_and_indexes():
+            inspector = inspect(db.engine)
+            return {
+                table: {
+                    "primary_key": inspector.get_pk_constraint(table),
+                    "foreign_keys": inspector.get_foreign_keys(table),
+                    "unique": inspector.get_unique_constraints(table),
+                    "indexes": inspector.get_indexes(table),
+                }
+                for table in ("category", "transactions", "budgets")
+            }
+
+        original_rows = rows()
+        original_keys = keys_and_indexes()
+        db.session.remove()
+
+        result = app.test_cli_runner().invoke(args=["init-db"])
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertEqual(rows(), original_rows)
+        self.assertEqual(keys_and_indexes(), original_keys)
+        inspector = inspect(db.engine)
+        for table, expected in (
+            ("category", {"name": 256, "color": 256}),
+            ("transactions", {"type": 256, "description": 512}),
+        ):
+            with self.subTest(table=table):
+                lengths = {
+                    column["name"]: column["type"].length
+                    for column in inspector.get_columns(table)
+                    if column["name"] in expected
+                }
+                self.assertEqual(lengths, expected)
+                self.assertEqual(inspector.get_check_constraints(table), [])
+
+        rejected_category = self.client.post(
+            "/categories", json={"name": "A" * 31, "color": "#123456"}
+        )
+        self.assertEqual(rejected_category.status_code, 400)
+        rejected_description = self.client.put(
+            "/transactions/29", json={"description": "A" * 201}
+        )
+        self.assertEqual(rejected_description.status_code, 400)
+        self.assertEqual(rows(), original_rows)
 
     def test_unversioned_database_with_data_is_rejected_without_changes(self):
         category = Category(id=17, name="Hrana", color="#123456")
