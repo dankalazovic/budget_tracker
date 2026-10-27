@@ -79,3 +79,63 @@ def validate_transaction(data, transaction=None):
         "description": description,
         "category_id": category_id,
     }
+
+
+def validate_query_integer(value, field, maximum=MAX_DATABASE_ID):
+    if not re.fullmatch(r"[0-9]+", value):
+        raise ValueError(f"{field} must be an integer between 1 and {maximum}")
+
+    try:
+        number = int(value)
+    except ValueError:
+        raise ValueError(f"{field} must be an integer between 1 and {maximum}") from None
+
+    if not 1 <= number <= maximum:
+        raise ValueError(f"{field} must be an integer between 1 and {maximum}")
+    return number
+
+
+def validate_transaction_filters(args):
+    fields = ("date_from", "date_to", "category_id", "type", "search", "page", "per_page")
+    for field in fields:
+        if len(args.getlist(field)) > 1:
+            raise ValueError(f"{field} must be provided only once")
+
+    dates = {"date_from": None, "date_to": None}
+    for field in dates:
+        if field in args:
+            try:
+                dates[field] = validate_date(args[field])
+            except ValueError:
+                raise ValueError(f"{field} must be a valid date in YYYY-MM-DD format") from None
+
+    if dates["date_from"] is not None and dates["date_to"] is not None:
+        if dates["date_from"] > dates["date_to"]:
+            raise ValueError("date_from must be on or before date_to")
+
+    category_id = None
+    if "category_id" in args:
+        category_id = validate_query_integer(args["category_id"], "category_id")
+
+    transaction_type = args.get("type")
+    if transaction_type is not None and transaction_type not in ("income", "expense"):
+        raise ValueError("type must be income or expense")
+
+    search = args.get("search")
+    if search is not None:
+        if "\x00" in search:
+            raise ValueError("search contains invalid text characters")
+        try:
+            search.encode("utf-8")
+        except UnicodeEncodeError:
+            raise ValueError("search contains invalid text characters") from None
+
+    return {
+        "date_from": dates["date_from"],
+        "date_to": dates["date_to"],
+        "category_id": category_id,
+        "type": transaction_type,
+        "search": search,
+        "page": validate_query_integer(args.get("page", "1"), "page"),
+        "per_page": validate_query_integer(args.get("per_page", "20"), "per_page", 100),
+    }

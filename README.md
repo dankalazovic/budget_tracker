@@ -1,8 +1,8 @@
 # Budget Tracker API
 
 REST API za licni budzet, napravljen koristeci Flask i PostgreSQL. Projekat je u
-izradi: trenutno su implementirane kategorije i pojedinacne CRUD operacije
-nad transakcijama.
+izradi: trenutno su implementirane kategorije, CRUD transakcija i lista
+transakcija sa filterima, sortiranjem i paginacijom.
 
 ## Pokretanje
 
@@ -49,8 +49,9 @@ Testovi koriste Pythonov ugradjeni `unittest` i zasebnu SQLite bazu u memoriji.
 Postavljaju testnu konekciju pre ucitavanja aplikacije i ne koriste PostgreSQL
 podatke iz `.env`. Baza u memoriji postoji samo tokom testiranja.
 
-Pokriveni su CRUD kategorija i transakcija, validacije, jedinstvenost i strani
-kljucevi u bazi, obnova sesije posle odbijenog upisa i priprema postojece baze.
+Pokriveni su CRUD kategorija i transakcija, lista/filteri/paginacija, validacije,
+jedinstvenost i strani kljucevi u bazi, obnova sesije posle odbijenog upisa i
+priprema postojece baze.
 Testovi ukljucuju SQLite proveru stranih kljuceva. SQLite testovi nisu zamena za
 proveru PostgreSQL specificnosti; SQLite `lower()` podrazumevano obradjuje samo
 ASCII slova.
@@ -198,6 +199,82 @@ Iznos u odgovoru uvek je string sa dve decimale, kako klijent ne bi morao da
 se osloni na binarni float zapis novca. Datum je ISO string, a odsutan opis je
 JSON `null`.
 
+### GET /transactions
+
+Vraca `200` i jednu stranicu transakcija. Parametri se salju kroz URL, bez JSON
+tela. Svi parametri su opcioni:
+
+| Parametar | Pravilo | Podrazumevano |
+| --- | --- | --- |
+| `date_from` | Ispravan `YYYY-MM-DD`; ukljucuje i taj datum. | Bez donje granice |
+| `date_to` | Ispravan `YYYY-MM-DD`; ukljucuje i taj datum. | Bez gornje granice |
+| `category_id` | Pozitivan ceo broj do 2147483647. | Sve kategorije |
+| `type` | Tacno `income` ili `expense`. | Oba tipa |
+| `search` | Deo teksta opisa, nezavisno od velicine slova. | Bez pretrage |
+| `page` | Pozitivan ceo broj do 2147483647. | `1` |
+| `per_page` | Ceo broj od 1 do 100. | `20` |
+
+Rezultati su sortirani po datumu opadajuce, pa po ID-ju opadajuce: noviji datum
+ide prvi; za isti datum poslednje dodata transakcija ide prva. Izmena iznosa ili
+opisa ne menja ID niti redosled medju transakcijama istog datuma.
+
+Filteri mogu da se kombinuju i svi moraju biti ispunjeni (AND). Ako su poslata
+oba datuma, `date_from` ne sme biti posle `date_to`. Datumsku granicu je moguce
+poslati i samostalno. Validan `category_id` koji ne postoji daje praznu listu,
+jer nijedna transakcija ne zadovoljava taj filter.
+
+`search` trazi doslovan deo teksta: `%`, `_`, `/` i `\` nisu obrasci za
+pretragu. Razmaci se zadrzavaju. Prazan `search=` se tretira kao izostavljena
+pretraga; neprazna pretraga ne ukljucuje transakcije bez opisa. NUL i neispravni
+Unicode znakovi u tekstu pretrage vracaju `400`.
+
+Primer: rashodi iz oktobra, prva stranica sa najvise 10 stavki:
+
+```text
+GET /transactions?type=expense&date_from=2026-10-01&date_to=2026-10-31&page=1&per_page=10
+```
+
+Primer odgovora ako postoji samo jedna odgovarajuca transakcija:
+
+```json
+{
+  "items": [
+    {
+      "id": 1,
+      "type": "expense",
+      "amount": "12.50",
+      "date": "2026-10-27",
+      "description": "Rucak",
+      "category_id": 1
+    }
+  ],
+  "page": 1,
+  "per_page": 10,
+  "total": 1,
+  "pages": 1
+}
+```
+
+- `items`: stavke trazene stranice, u istom obliku kao pojedinacna transakcija.
+- `page` i `per_page`: trazeni broj stranice i najveci broj stavki na njoj.
+- `total`: ukupan broj transakcija koje zadovoljavaju filtere, pre paginacije.
+- `pages`: broj stranica za taj `total` i `per_page`.
+
+Bez rezultata vraca se `items: []`, `total: 0` i `pages: 0`. Stranica iza
+poslednje takodje vraca `200` i prazne `items`, uz stvarne `total` i `pages`.
+Paginaciju radi baza; ne ucitava se cela lista u Python da bi se zatim delila.
+
+Neispravni parametri vracaju `400` i objasnjenje, na primer:
+
+```json
+{"error": "per_page must be an integer between 1 and 100"}
+```
+
+Brojevni parametri koriste cifre 0-9, bez razmaka, decimalne tacke ili znaka.
+Prazne vrednosti nisu dozvoljene, osim `search=`. Podrzani parametar moze se
+poslati samo jednom; npr. `type=income&type=expense` vraca `400`. Nepoznati
+parametri se zanemaruju.
+
 ### GET /transactions/{id}
 
 Vraca `200` i pojedinacnu transakciju u istom obliku kao odgovor kreiranja.
@@ -247,6 +324,5 @@ ostaje sacuvana. Nepostojeca transakcija vraca `404`.
 
 ## Preostali delovi zadatka
 
-Lista transakcija (`GET /transactions`), kombinovani filteri i paginacija,
-budzeti, mesecni pregled i CSV import jos nisu implementirani. Njihova
+Budzeti, mesecni pregled i CSV import jos nisu implementirani. Njihova
 dokumentacija i testovi bice dodavani uz implementaciju.

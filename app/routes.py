@@ -5,7 +5,7 @@ from flask import request, jsonify
 from sqlalchemy.exc import IntegrityError
 from app import app, db
 from app.models import Category, Transaction
-from app.validation import MAX_DATABASE_ID, validate_transaction
+from app.validation import MAX_DATABASE_ID, validate_transaction, validate_transaction_filters
 
 
 def is_category_name_conflict(error):
@@ -250,6 +250,47 @@ def get_transaction(transaction_id):
         return jsonify({"error": "Transaction not found"}), 404
 
     return jsonify(transaction.to_dict()), 200
+
+
+@app.route("/transactions", methods=["GET"])
+def get_transactions():
+    try:
+        filters = validate_transaction_filters(request.args)
+    except ValueError as error:
+        return jsonify({"error": str(error)}), 400
+
+    query = db.select(Transaction)
+
+    if filters["date_from"] is not None:
+        query = query.where(Transaction.date >= filters["date_from"])
+    if filters["date_to"] is not None:
+        query = query.where(Transaction.date <= filters["date_to"])
+    if filters["category_id"] is not None:
+        query = query.where(Transaction.category_id == filters["category_id"])
+    if filters["type"] is not None:
+        query = query.where(Transaction.type == filters["type"])
+    if filters["search"]:
+        # autoescape tretira % i _ kao tekst, a ne SQL wildcard znakove.
+        query = query.where(
+            Transaction.description.icontains(filters["search"], autoescape=True)
+        )
+
+    query = query.order_by(Transaction.date.desc(), Transaction.id.desc())
+    pagination = db.paginate(
+        query,
+        page=filters["page"],
+        per_page=filters["per_page"],
+        max_per_page=100,
+        error_out=False,
+    )
+
+    return jsonify({
+        "items": [transaction.to_dict() for transaction in pagination.items],
+        "page": pagination.page,
+        "per_page": pagination.per_page,
+        "total": pagination.total,
+        "pages": pagination.pages,
+    }), 200
 
 
 @app.route("/transactions/<int:transaction_id>", methods=["PUT"])
