@@ -1,4 +1,5 @@
 from enum import StrEnum
+from decimal import Decimal
 
 
 class ErrorMessage(StrEnum):
@@ -29,3 +30,4 @@ class ConstraintName(StrEnum):
 
 DEFAULT_PAGE_SIZE = 20
 MAX_PAGE_SIZE = 100
+ZERO_AMOUNT = Decimal("0.00")

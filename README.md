@@ -2,7 +2,8 @@
 
 REST API za licni budzet, napravljen koristeci Flask i PostgreSQL. Projekat je u
 izradi: trenutno su implementirane kategorije, CRUD transakcija, lista
-transakcija sa filterima, sortiranjem i paginacijom i mesecni budzeti kategorija.
+transakcija sa filterima, sortiranjem i paginacijom, mesecni budzeti kategorija
+i mesecni pregled prihoda, rashoda i potrosnje naspram budzeta.
 
 ## Pokretanje
 
@@ -53,6 +54,7 @@ app/
     categories.py      # rute kategorija
     transactions.py    # rute transakcija
     budgets.py         # postavljanje, lista i uklanjanje budzeta
+    summary.py         # mesecni pregled prihoda, rashoda i budzeta
     health.py          # pocetna provera rada
     helpers.py         # zajednicki pomocni kod ruta
   schemas/
@@ -60,6 +62,7 @@ app/
     category.py        # ulazne i izlazne seme kategorija
     transaction.py     # seme transakcija, liste i filtera
     budget.py          # seme iznosa, meseca i odgovora budzeta
+    summary.py         # seme mesecnog pregleda
   commands.py          # CLI komanda za migracije
 migrations/
   env.py               # povezivanje Alembic-a sa modelima i bazom
@@ -130,6 +133,9 @@ Treca revizija dodaje tabelu `budgets`, strani kljuc ka kategoriji sa
 `ON DELETE CASCADE` i jedinstvenost para kategorija/mesec. Ne menja postojece
 redove kategorija ili transakcija i ne dodaje poslovna CHECK ogranicenja.
 
+Mesecni pregled samo cita postojece tabele, pa za njega nije potrebna nova
+Alembic revizija niti posebna tabela sa sacuvanim zbirnim vrednostima.
+
 Konfiguracija ukljucuje Alembic-ov ugradjeni `checkconstraint_byname` dodatak,
 kako bi `revision --autogenerate` prepoznao uklanjanje imenovanih CHECK
 ogranicenja. Revizija koristi generisani batch oblik: PostgreSQL izvrsava
@@ -146,10 +152,11 @@ ili izlaz API-ja: dozvoljene tipove, vrednosti i format odgovora.
 iznos je `Decimal`, a datum je Python `date`. Nepoznata ulazna polja se
 zanemaruju. Tip transakcije je enum sa vrednostima `income` i `expense`.
 
-`CategoryResponse`, `TransactionResponse`, `TransactionListResponse` i `BudgetResponse`
+`CategoryResponse`, `TransactionResponse`, `TransactionListResponse`,
+`BudgetResponse` i `MonthlySummaryResponse`
 pripremaju izlaz. Njihov `model_dump(mode="json")` pravi recnik pogodan za
 JSON odgovor, sa iznosom u obliku `"12.50"`. Datum transakcije je `YYYY-MM-DD`,
-a mesec budzeta `YYYY-MM`. Podesavanje
+a mesec budzeta i pregleda `YYYY-MM`. Podesavanje
 `from_attributes=True` dozvoljava da sema procita atribute SQLAlchemy objekta,
 umesto da prvo rucno pravimo recnik za svako polje.
 
@@ -190,7 +197,8 @@ Komanda za pokretanje svih testova:
 ```
 
 Testovi koriste Pythonov ugradjeni `unittest`. Pokriveni su CRUD kategorija i
-transakcija, lista/filteri/paginacija, budzeti po mesecu i kategoriji, Pydantic seme, poslovne validacije,
+transakcija, lista/filteri/paginacija, budzeti po mesecu i kategoriji, mesecni
+pregled, Pydantic seme i poslovne validacije,
 jedinstvenost i strani kljucevi, centralni odgovori na greske, ciscenje sesije
 posle zahteva i Alembic migracije sa ocuvanjem podataka.
 
@@ -565,17 +573,82 @@ Budzet je povezan sa kategorijom stranim kljucem `ON DELETE CASCADE`. Zato
 brisanje kategorije bez transakcija uklanja njene budzete, dok kategorija sa
 transakcijama i dalje ne moze da se obrise.
 
+## API: mesecni pregled
+
+### GET /summary?month=YYYY-MM
+
+Vraca `200` i pregled samo za trazeni mesec. Obavezan je jedan ispravan
+parametar `month` u obliku `YYYY-MM`, kao kod liste budzeta. Izostavljen,
+neispravan ili ponovljen `month` vraca `400` sa JSON `error` porukom.
+
+```text
+GET /summary?month=2026-10
+```
+
+Primer odgovora:
+
+```json
+{
+  "month": "2026-10",
+  "total_income": "1000.00",
+  "total_expense": "250.00",
+  "balance": "750.00",
+  "categories": [
+    {
+      "category_id": 1,
+      "category_name": "Hrana",
+      "spent": "250.00",
+      "budget": "200.00",
+      "remaining": "-50.00"
+    },
+    {
+      "category_id": 2,
+      "category_name": "Prevoz",
+      "spent": "0.00",
+      "budget": "50.00",
+      "remaining": "50.00"
+    }
+  ]
+}
+```
+
+| Polje | Znacenje |
+| --- | --- |
+| `total_income` | Zbir svih prihoda u mesecu. |
+| `total_expense` | Zbir svih rashoda u mesecu. |
+| `balance` | `total_income - total_expense`; moze biti negativan. |
+| `categories[].spent` | Rashodi te kategorije u mesecu. |
+| `categories[].budget` | Planirani budzet kategorije za mesec, ili `"0.00"` ako nije postavljen. |
+| `categories[].remaining` | `budget - spent`; negativan iznos oznacava potrosnju iznad prikazanog budzeta. |
+
+Budzet je plan i ne ulazi u ukupne prihode, rashode ili saldo. Lista ukljucuje
+svaku kategoriju koja u tom mesecu ima rashod ili budzet. Kategorija samo sa
+prihodom ne pojavljuje se na listi ako nema i budzet. Kategorija samo sa
+budzetom ima `spent: "0.00"`.
+
+Kada kategorija ima rashod, ali nema postavljen budzet, odgovor prikazuje
+`budget: "0.00"`, a `remaining` je negativan iznos njene potrosnje. Rezultati
+su sortirani po potrosnji opadajuce, zatim po imenu kategorije rastuce.
+
+Granice meseca su ukljucive: racunaju se transakcije od prvog do poslednjeg
+dana. Mesec bez transakcija i budzeta vraca sva tri ukupna iznosa kao `"0.00"`
+i praznu listu `categories`.
+
+Svi iznosi su decimalni stringovi sa dve decimale. Zbirni iznosi nisu ograniceni
+na maksimum jedne transakcije. Pregled ne menja transakcije, budzete ni
+kategorije; zbirne vrednosti racuna baza nad postojecim podacima.
+
 ## Status implementacije
 
 Zavrseni su kategorije, pojedinacni CRUD transakcija, njihova sortirana lista
-sa kombinovanim filterima i paginacijom, mesecni budzeti kategorija, modularna struktura, SQLAlchemy 2
+sa kombinovanim filterima i paginacijom, mesecni budzeti kategorija, mesecni
+pregled prihoda/rashoda/budzeta, modularna struktura, SQLAlchemy 2
 modeli, Alembic migracije, Pydantic validacija/serijalizacija, centralna obrada
 gresaka, sesija po zahtevu i Loguru. Postoje testovi i dokumentacija tih delova.
 Projekat jos nije kompletan prema PDF zadatku.
 
 Preostale funkcionalnosti su:
 
-- Mesecni pregled prihoda, rashoda, salda i potrosnje naspram budzeta.
 - CSV import do milion redova, sa prijavom neuspelih redova i razloga.
 - Testovi i dokumentacija novih celina, pa zavrsna provera svih zahteva PDF-a.
 
