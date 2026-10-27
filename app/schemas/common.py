@@ -56,6 +56,19 @@ def calendar_date(value):
     return value
 
 
+def calendar_month(value):
+    if type(value) is date:
+        if value.day != 1:
+            raise ValueError(ErrorMessage.MONTH_FORMAT)
+        return value
+    if not isinstance(value, str) or not re.fullmatch(r"[0-9]{4}-[0-9]{2}", value):
+        raise ValueError(ErrorMessage.MONTH_FORMAT)
+    try:
+        return date.fromisoformat(value + "-01")
+    except ValueError:
+        raise ValueError(ErrorMessage.MONTH_FORMAT) from None
+
+
 def query_integer(value):
     if isinstance(value, str):
         if not re.fullmatch(r"[0-9]+", value):
@@ -68,6 +81,7 @@ CleanText = Annotated[StrictStr, AfterValidator(valid_text)]
 DatabaseID = Annotated[StrictInt, Field(gt=0, le=MAX_DATABASE_ID)]
 QueryInteger = Annotated[StrictInt, BeforeValidator(query_integer)]
 CalendarDate = Annotated[date, BeforeValidator(calendar_date)]
+Month = Annotated[date, BeforeValidator(calendar_month)]
 Amount = Annotated[
     Decimal,
     Field(gt=0, le=Decimal("1000000"), allow_inf_nan=False),

@@ -27,6 +27,8 @@ class AppStructureTests(unittest.TestCase):
             "/categories/<int:category_id>": {"PUT", "DELETE"},
             "/transactions": {"GET", "POST"},
             "/transactions/<int:transaction_id>": {"GET", "PUT", "DELETE"},
+            "/budgets": {"GET"},
+            "/budgets/<month>/<int:category_id>": {"PUT", "DELETE"},
         }
         for path, methods in expected.items():
             with self.subTest(path=path):

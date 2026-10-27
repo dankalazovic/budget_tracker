@@ -33,7 +33,7 @@ class InitDatabaseTests(BaseTestCase):
         self.assertEqual(result.exit_code, 0, result.output)
         self.assertEqual(
             set(inspect(db.engine).get_table_names()),
-            {"category", "transactions", "alembic_version"},
+            {"category", "transactions", "budgets", "alembic_version"},
         )
         expected_revision = ScriptDirectory.from_config(migration_config()).get_current_head()
         self.assertIsNotNone(expected_revision)
@@ -114,6 +114,45 @@ class InitDatabaseTests(BaseTestCase):
             TransactionResponse.model_validate(saved).model_dump(mode="json"), original
         )
         self.assertEqual(db.session.get(Category, 17).name, "Hrana")
+
+    def test_adding_budgets_preserves_existing_categories_and_transactions(self):
+        self.start_with_empty_database()
+        with db.engine.begin() as connection:
+            command.upgrade(migration_config(connection), "4a0687671733")
+        self.assertFalse(inspect(db.engine).has_table("budgets"))
+
+        category = Category(id=17, name="Hrana", color="#123456")
+        transaction = Transaction(
+            id=29, type="expense", amount=Decimal("12.50"),
+            date=date(2026, 10, 27), description="Rucak", category=category,
+        )
+        db.session.add(transaction)
+        db.session.commit()
+        original = TransactionResponse.model_validate(transaction).model_dump(mode="json")
+        db.session.remove()
+
+        result = app.test_cli_runner().invoke(args=["init-db"])
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        inspector = inspect(db.engine)
+        self.assertTrue(inspector.has_table("budgets"))
+        self.assertEqual(inspector.get_check_constraints("budgets"), [])
+        unique = inspector.get_unique_constraints("budgets")
+        self.assertTrue(any(
+            constraint["name"] == "uq_budget_category_month"
+            and set(constraint["column_names"]) == {"category_id", "month"}
+            for constraint in unique
+        ))
+        foreign_keys = inspector.get_foreign_keys("budgets")
+        self.assertEqual(len(foreign_keys), 1)
+        self.assertEqual(foreign_keys[0]["name"], "fk_budget_category")
+        self.assertEqual(foreign_keys[0]["referred_table"], "category")
+        self.assertEqual(foreign_keys[0]["options"].get("ondelete"), "CASCADE")
+        self.assertEqual(db.session.get(Category, 17).name, "Hrana")
+        self.assertEqual(
+            TransactionResponse.model_validate(db.session.get(Transaction, 29)).model_dump(mode="json"),
+            original,
+        )
 
     def test_unversioned_database_with_data_is_rejected_without_changes(self):
         category = Category(id=17, name="Hrana", color="#123456")

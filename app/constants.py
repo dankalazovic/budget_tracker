@@ -15,11 +15,16 @@ class ErrorMessage(StrEnum):
     POSITIVE_INTEGER = "Value must be a positive integer"
     DATE_RANGE = "date_from must be on or before date_to"
     REPEATED_QUERY_PARAMETER = "{field} must be provided only once"
+    MONTH_FORMAT = "Month must be a valid month in YYYY-MM format"
+    BUDGET_NOT_FOUND = "Budget not found"
+    BUDGET_EXISTS = "Budget already exists for this category and month"
 
 
 class ConstraintName(StrEnum):
     CATEGORY_NAME = "uq_category_name_lower"
     TRANSACTION_CATEGORY = "fk_transaction_category"
+    BUDGET_CATEGORY = "fk_budget_category"
+    BUDGET_CATEGORY_MONTH = "uq_budget_category_month"
 
 
 DEFAULT_PAGE_SIZE = 20

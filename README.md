@@ -1,8 +1,8 @@
 # Budget Tracker API
 
 REST API za licni budzet, napravljen koristeci Flask i PostgreSQL. Projekat je u
-izradi: trenutno su implementirane kategorije, CRUD transakcija i lista
-transakcija sa filterima, sortiranjem i paginacijom.
+izradi: trenutno su implementirane kategorije, CRUD transakcija, lista
+transakcija sa filterima, sortiranjem i paginacijom i mesecni budzeti kategorija.
 
 ## Pokretanje
 
@@ -48,15 +48,18 @@ app/
   models/
     category.py        # model kategorije
     transaction.py     # model transakcije
+    budget.py          # mesecni budzet kategorije
   api/
     categories.py      # rute kategorija
     transactions.py    # rute transakcija
+    budgets.py         # postavljanje, lista i uklanjanje budzeta
     health.py          # pocetna provera rada
     helpers.py         # zajednicki pomocni kod ruta
   schemas/
     common.py          # zajednicki Pydantic tipovi i provere
     category.py        # ulazne i izlazne seme kategorija
     transaction.py     # seme transakcija, liste i filtera
+    budget.py          # seme iznosa, meseca i odgovora budzeta
   commands.py          # CLI komanda za migracije
 migrations/
   env.py               # povezivanje Alembic-a sa modelima i bazom
@@ -115,11 +118,17 @@ Lanac migracija trenutno je:
 a128effd0953  Pocetna sema kategorija i transakcija
       |
 4a0687671733  Uklonjena CHECK ogranicenja transakcija
+      |
+43a98f115024  Dodati budzeti po kategoriji i mesecu
 ```
 
 Druga revizija uklanja samo imenovana CHECK ogranicenja za tip i opseg iznosa.
 Ne brise poslovne redove, kolone, strane kljuceve niti jedinstveni indeks
 kategorija. Poslovna pravila sada proveravaju Pydantic ulazne seme.
+
+Treca revizija dodaje tabelu `budgets`, strani kljuc ka kategoriji sa
+`ON DELETE CASCADE` i jedinstvenost para kategorija/mesec. Ne menja postojece
+redove kategorija ili transakcija i ne dodaje poslovna CHECK ogranicenja.
 
 Konfiguracija ukljucuje Alembic-ov ugradjeni `checkconstraint_byname` dodatak,
 kako bi `revision --autogenerate` prepoznao uklanjanje imenovanih CHECK
@@ -132,14 +141,15 @@ Generisana migracija se i dalje pregleda pre primene.
 SQLAlchemy model opisuje cuvanje podatka u bazi. Pydantic sema opisuje ulaz
 ili izlaz API-ja: dozvoljene tipove, vrednosti i format odgovora.
 
-`CategoryCreate` i `TransactionInput` proveravaju unos kroz
+`CategoryCreate`, `TransactionInput` i `BudgetInput` proveravaju unos kroz
 `model_validate(data)`. Rezultat ima proverena, tipizirana polja: na primer,
 iznos je `Decimal`, a datum je Python `date`. Nepoznata ulazna polja se
 zanemaruju. Tip transakcije je enum sa vrednostima `income` i `expense`.
 
-`CategoryResponse`, `TransactionResponse` i `TransactionListResponse`
+`CategoryResponse`, `TransactionResponse`, `TransactionListResponse` i `BudgetResponse`
 pripremaju izlaz. Njihov `model_dump(mode="json")` pravi recnik pogodan za
-JSON odgovor, sa iznosom u obliku `"12.50"` i ISO datumom. Podesavanje
+JSON odgovor, sa iznosom u obliku `"12.50"`. Datum transakcije je `YYYY-MM-DD`,
+a mesec budzeta `YYYY-MM`. Podesavanje
 `from_attributes=True` dozvoljava da sema procita atribute SQLAlchemy objekta,
 umesto da prvo rucno pravimo recnik za svako polje.
 
@@ -147,7 +157,7 @@ JSON parser cita decimalne brojeve kao `Decimal` pre validacije. Time cuvamo
 sve poslate decimale i mozemo da odbijemo i unos poput `1.00000000000000001`,
 umesto da ga obican float parser prethodno skrati na `1.0`.
 
-Za delimicni PUT prvo spojimo postojece vrednosti sa poslatim poljima, pa
+Za delimicni PUT kategorija i transakcija prvo spojimo postojece vrednosti sa poslatim poljima, pa
 validiramo ceo rezultat. Izostavljeno polje zadrzava vrednost; izricito `null`
 nije dozvoljeno za obavezna polja. Opis moze biti `null`.
 
@@ -180,7 +190,7 @@ Komanda za pokretanje svih testova:
 ```
 
 Testovi koriste Pythonov ugradjeni `unittest`. Pokriveni su CRUD kategorija i
-transakcija, lista/filteri/paginacija, Pydantic seme, poslovne validacije,
+transakcija, lista/filteri/paginacija, budzeti po mesecu i kategoriji, Pydantic seme, poslovne validacije,
 jedinstvenost i strani kljucevi, centralni odgovori na greske, ciscenje sesije
 posle zahteva i Alembic migracije sa ocuvanjem podataka.
 
@@ -195,7 +205,8 @@ parametara ili detalja exception-a u odgovoru.
 Poslovne poruke i nazivi ogranicenja definisani su u `app/constants.py`, a
 statusi se koriste kroz `HTTPStatus`. Jedinstvenost imena kategorije daje
 `409`; nepostojeca kategorija pri upisu transakcije daje `400`, a pokusaj
-brisanja kategorije sa transakcijama daje `409`.
+brisanja kategorije sa transakcijama daje `409`. Paralelni pokusaj kreiranja
+drugog budzeta za isti par kategorija/mesec daje `409`.
 
 Na pocetku zahteva inicijalizuje se SQLAlchemy sesija. Rute eksplicitno
 pozivaju `commit()` posle uspesne promene. Teardown zahteva radi `rollback()`
@@ -273,7 +284,8 @@ Brise kategoriju i vraca `204` bez tela odgovora.
 
 Kategorija koja ima transakcije ne moze se obrisati: vraca se `409` sa porukom
 `{"error": "Category has transactions and cannot be deleted"}`. Transakcije
-ostaju sacuvane. Brisanje budzeta uz kategoriju bice dodato sa modelom budzeta.
+ostaju sacuvane, kao i njeni budzeti. Ako kategorija nema transakcije, njeno
+brisanje automatski uklanja sve njene budzete, u svim mesecima.
 
 ### Greske kategorija
 
@@ -476,17 +488,93 @@ ostaje sacuvana. Nepostojeca transakcija vraca `404`.
 | `400` | Navedena kategorija ne postoji | `{"error": "Category not found"}` |
 | `404` | Transakcija ne postoji | `{"error": "Transaction not found"}` |
 
+## API: budzeti
+
+Budzet predstavlja planirani rashod jedne kategorije u jednom mesecu.
+Kombinacija `category_id` i `month` je jedinstvena. Mesec se u zahtevima i
+odgovorima pise kao `YYYY-MM`, a u bazi cuva kao datum prvog dana tog meseca.
+
+Iznos ima ista pravila kao iznos transakcije: mora biti veci od 0, najvise
+`1000000.00`, sa najvise dve decimale. Moze se poslati kao JSON broj ili
+decimalni string sa tackom, bez separatora hiljada i okolnih razmaka. Dodatne
+decimale odbijaju se i kada su nule, na primer `"200.000"`.
+
+### PUT /budgets/{month}/{category_id}
+
+Postavlja ili menja budzet postojece kategorije za zadati mesec. Kategorija i
+mesec odredjeni su URL-om; telo sadrzi obavezni `amount`:
+
+```text
+PUT /budgets/2026-10/1
+```
+
+```json
+{"amount": "200.00"}
+```
+
+Ako budzet za taj par jos ne postoji, vraca se `201`:
+
+```json
+{
+  "id": 1,
+  "month": "2026-10",
+  "category_id": 1,
+  "amount": "200.00"
+}
+```
+
+Ako vec postoji, vraca se `200` i azurirani budzet istog oblika i istog ID-ja.
+Ponovljen isti zahtev ne pravi dodatni red. Nepoznata polja u telu se
+zanemaruju; slanje `month` ili `category_id` u telu ne menja par iz URL-a.
+
+### GET /budgets?month=YYYY-MM
+
+Obavezan je jedan parametar `month`. Vraca `200` i listu budzeta samo za taj
+mesec, sortiranu po imenu kategorije rastuce:
+
+```text
+GET /budgets?month=2026-10
+```
+
+```json
+[
+  {"id": 1, "month": "2026-10", "category_id": 1, "amount": "200.00"}
+]
+```
+
+Ako taj mesec nema budzete, odgovor je `[]`. Lista nema paginaciju.
+Izostavljen, neispravan ili ponovljen `month` vraca `400`. Mesec mora imati
+ispravan kalendarski oblik `YYYY-MM`; npr. `2026-13`, `2026-1` i `0000-01`
+nisu dozvoljeni.
+
+### DELETE /budgets/{month}/{category_id}
+
+Uklanja budzet tog para i vraca `204` bez tela odgovora. Kategorija i njene
+transakcije ostaju sacuvane. Ako budzet ne postoji, vraca se `404`.
+
+### Greske budzeta
+
+| Status | Znacenje | Primer odgovora |
+| --- | --- | --- |
+| `400` | Neispravan JSON, iznos ili mesec | `{"error": "Invalid JSON data"}` |
+| `404` | Kategorija pri postavljanju ne postoji | `{"error": "Category not found"}` |
+| `404` | Budzet za trazeni par ne postoji pri brisanju | `{"error": "Budget not found"}` |
+| `409` | Paralelni upis je vec napravio budzet istog para | `{"error": "Budget already exists for this category and month"}` |
+
+Budzet je povezan sa kategorijom stranim kljucem `ON DELETE CASCADE`. Zato
+brisanje kategorije bez transakcija uklanja njene budzete, dok kategorija sa
+transakcijama i dalje ne moze da se obrise.
+
 ## Status implementacije
 
 Zavrseni su kategorije, pojedinacni CRUD transakcija, njihova sortirana lista
-sa kombinovanim filterima i paginacijom, modularna struktura, SQLAlchemy 2
+sa kombinovanim filterima i paginacijom, mesecni budzeti kategorija, modularna struktura, SQLAlchemy 2
 modeli, Alembic migracije, Pydantic validacija/serijalizacija, centralna obrada
 gresaka, sesija po zahtevu i Loguru. Postoje testovi i dokumentacija tih delova.
 Projekat jos nije kompletan prema PDF zadatku.
 
 Preostale funkcionalnosti su:
 
-- Budzeti po kategoriji i mesecu, uz najvise jedan budzet za tu kombinaciju.
 - Mesecni pregled prihoda, rashoda, salda i potrosnje naspram budzeta.
 - CSV import do milion redova, sa prijavom neuspelih redova i razloga.
 - Testovi i dokumentacija novih celina, pa zavrsna provera svih zahteva PDF-a.

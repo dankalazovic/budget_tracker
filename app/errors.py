@@ -9,6 +9,12 @@ from app.constants import ConstraintName, ErrorMessage
 
 
 INTEGRITY_ERRORS = {
+    (ConstraintName.BUDGET_CATEGORY_MONTH, None): (
+        HTTPStatus.CONFLICT, ErrorMessage.BUDGET_EXISTS,
+    ),
+    (ConstraintName.BUDGET_CATEGORY, None): (
+        HTTPStatus.NOT_FOUND, ErrorMessage.CATEGORY_NOT_FOUND,
+    ),
     (ConstraintName.CATEGORY_NAME, None): (
         HTTPStatus.CONFLICT, ErrorMessage.CATEGORY_EXISTS,
     ),
